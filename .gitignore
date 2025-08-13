@@ -1,2 +1,37 @@
-.idea/*
-.venv/*
+# Python cache and compiled files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+
+# Virtual environments
+venv/
+.env/
+.venv/
+env/
+ENV/
+
+# Environment files (contains secrets)
+*.env
+
+# Logs
+*.log
+
+# IDE settings
+.vscode/
+.idea/
+
+# macOS / Linux / Windows OS files
+.DS_Store
+Thumbs.db
+
+# Test / coverage outputs
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Distribution / build artifacts
+build/
+dist/
+*.egg-info/
