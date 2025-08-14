@@ -43,10 +43,17 @@ class MenuSystem:
                 phase_display = state['current_phase'].replace('_', ' ').title()
                 state_line = f"Current State: Round {state['current_round']} - {phase_display}"
 
+                # Get team counts
+                team_count = self.db_manager.get_teams_count()
+
+                # Get teams with DOMjudge accounts
+                domjudge_query = "SELECT COUNT(*) as count FROM teams WHERE domjudge_team_id IS NOT NULL"
+                domjudge_result = self.db_manager.fetch_one(domjudge_query)
+                domjudge_count = domjudge_result['count'] if domjudge_result else 0
+
                 teams_line = (
-                    f"Winners: {state['winners_league_count']} | "
-                    f"Losers: {state['losers_league_count']} | "
-                    f"Eliminated: {state['eliminated_count']}"
+                    f"Teams: {team_count}/{TOURNAMENT_CONFIG['total_teams']} loaded | "
+                    f"DOMjudge: {domjudge_count}/{team_count} accounts"
                 )
 
                 return f"{state_line}\n{teams_line}"
@@ -145,12 +152,46 @@ class MenuSystem:
         setup_menu.show_menu()
 
     def _tournament_control_menu(self):
-        """Tournament control menu - placeholder for future implementation"""
+        """Tournament control menu - enhanced for Step 3"""
         self.display_header()
         print("\n🎮 Tournament Control")
         print("═" * 25)
-        print(f"{MESSAGES['not_implemented']}")
-        print("\nThis section will include:")
+
+        # Show current tournament readiness
+        if self.db_manager.is_connected():
+            state = self.db_manager.get_tournament_state()
+            team_count = self.db_manager.get_teams_count()
+            expected_teams = TOURNAMENT_CONFIG['total_teams']
+
+            if state and team_count == expected_teams:
+                print("✅ System Status: Ready for tournament operations")
+                print(f"📊 Current Phase: {state['current_phase'].replace('_', ' ').title()}")
+                print(f"🏆 Round: {state['current_round']}")
+                print()
+
+                # Show available options based on current state
+                if state['current_phase'] == 'setup':
+                    print("🚧 Available Operations:")
+                    print("• Contest creation and setup (Step 3)")
+                    print("• Tournament initialization")
+                elif state['current_phase'] == 'round_active':
+                    print("🚧 Available Operations:")
+                    print("• Monitor active contests")
+                    print("• Check contest status")
+                else:
+                    print("🚧 Available Operations:")
+                    print("• Process round results")
+                    print("• Advance teams to next round")
+            else:
+                print("⚠️ System Status: Setup incomplete")
+                if team_count != expected_teams:
+                    print(f"❌ Teams: {team_count}/{expected_teams} loaded")
+                print("💡 Please complete Setup & Configuration first")
+        else:
+            print("❌ System Status: Database not connected")
+
+        print(f"\n{MESSAGES['not_implemented']}")
+        print("\nComing in Step 4:")
         print("• ▶️  Start Tournament (Round 1)")
         print("• 📊 Process Round Results")
         print("• ✅ Activate Next Round")
@@ -161,30 +202,102 @@ class MenuSystem:
         self.pause_for_user()
 
     def _monitoring_menu(self):
-        """Monitoring and reports menu - placeholder"""
+        """Monitoring and reports menu - enhanced status display"""
         self.display_header()
         print("\n📊 Monitoring & Reports")
         print("═" * 25)
-        print(f"{MESSAGES['not_implemented']}")
-        print("\nThis section will include:")
-        print("• Live tournament status")
-        print("• Contest monitoring")
-        print("• Team performance reports")
-        print("• Tournament analytics")
+
+        # Show current system status
+        if self.db_manager.is_connected():
+            print("📈 System Status Overview:")
+            print("-" * 30)
+
+            # Tournament database status
+            state = self.db_manager.get_tournament_state()
+            if state:
+                print(f"🎯 Tournament Phase: {state['current_phase'].replace('_', ' ').title()}")
+                print(f"🏆 Current Round: {state['current_round']}")
+
+            # Team statistics
+            team_count = self.db_manager.get_teams_count()
+            expected_teams = TOURNAMENT_CONFIG['total_teams']
+            print(f"👥 Teams Loaded: {team_count}/{expected_teams}")
+
+            # DOMjudge accounts
+            domjudge_query = "SELECT COUNT(*) as count FROM teams WHERE domjudge_team_id IS NOT NULL"
+            result = self.db_manager.fetch_one(domjudge_query)
+            domjudge_count = result['count'] if result else 0
+            print(f"🔗 DOMjudge Accounts: {domjudge_count}/{team_count}")
+
+            # Contest status (placeholder for Step 3)
+            print(f"🏆 Contests Created: 0/TBD (Step 3)")
+
+            print("-" * 30)
+        else:
+            print("❌ Cannot display status: Database not connected")
+
+        print(f"\n{MESSAGES['not_implemented']}")
+        print("\nComing in Step 5:")
+        print("• 📊 Live tournament status")
+        print("• 🏆 Contest monitoring dashboard")
+        print("• 👥 Team performance reports")
+        print("• 📈 Tournament analytics")
+        print("• ⚡ Real-time contest updates")
 
         self.pause_for_user()
 
     def _system_tools_menu(self):
-        """System tools menu - placeholder"""
+        """System tools menu - enhanced with actual tools"""
         self.display_header()
         print("\n🔧 System Tools")
         print("═" * 20)
-        print(f"{MESSAGES['not_implemented']}")
-        print("\nThis section will include:")
-        print("• Database maintenance")
-        print("• DOMjudge integration tools")
-        print("• Debug utilities")
-        print("• System diagnostics")
+
+        # Show quick system diagnostics
+        print("🔍 Quick System Diagnostics:")
+        print("-" * 35)
+
+        # Tournament DB status
+        if self.db_manager.is_connected():
+            print("✅ Tournament Database: Connected")
+            if self.db_manager.test_connection():
+                print("✅ Tournament DB Test: Passed")
+            else:
+                print("❌ Tournament DB Test: Failed")
+        else:
+            print("❌ Tournament Database: Not Connected")
+
+        # DOMjudge DB status (test connection)
+        try:
+            from core import DOMjudgeDBManager
+            domjudge_db = DOMjudgeDBManager()
+            if domjudge_db.connect():
+                print("✅ DOMjudge Database: Accessible")
+                domjudge_db.disconnect()
+            else:
+                print("❌ DOMjudge Database: Connection Failed")
+        except Exception as e:
+            print(f"❌ DOMjudge Database: Error ({str(e)[:30]}...)")
+
+        # DOMjudge API status
+        try:
+            from core import DOMjudgeAPI
+            api = DOMjudgeAPI()
+            if api.test_connection():
+                print("✅ DOMjudge API: Accessible")
+            else:
+                print("❌ DOMjudge API: Connection Failed")
+        except Exception as e:
+            print(f"❌ DOMjudge API: Error ({str(e)[:30]}...)")
+
+        print("-" * 35)
+
+        print(f"\n{MESSAGES['not_implemented']}")
+        print("\nComing in Step 6:")
+        print("• 🗄️ Database backup/restore utilities")
+        print("• 🔄 DOMjudge synchronization tools")
+        print("• 🐛 Debug utilities and diagnostics")
+        print("• 📊 System performance monitoring")
+        print("• 🔧 Configuration management")
 
         self.pause_for_user()
 
