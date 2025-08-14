@@ -4,7 +4,6 @@ Handles database setup, team management, and contest configuration
 """
 
 import pymysql
-from typing import Optional
 from core import DatabaseManager
 from config import DB_CONFIG, MESSAGES, TOURNAMENT_CONFIG
 
@@ -12,9 +11,8 @@ from config import DB_CONFIG, MESSAGES, TOURNAMENT_CONFIG
 class SetupMenu:
     """Handles all setup and configuration menu operations"""
 
-    def __init__(self, db_manager: DatabaseManager , domjudge_db: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager):
         self.db_manager = db_manager
-        self.domjudge_db = domjudge_db
 
     def show_menu(self):
         """Display setup menu and handle navigation"""
@@ -49,7 +47,7 @@ class SetupMenu:
 
             # Show connection status
             tournament_status = "🟢 Connected" if self.db_manager.is_connected() else "🔴 Disconnected"
-            domjudge_status = "🟢 Available" if self.domjudge_db.is_connected() else "🔴 Unavailable"
+            domjudge_status = "🟢 Available" if self._test_domjudge_connection(silent=True) else "🔴 Unavailable"
 
             print(f"\n🗄️ Database Setup")
             print("═" * 20)
@@ -129,13 +127,6 @@ class SetupMenu:
                 print("  ❌ Tournament database: Connection issues")
         else:
             print("  ❌ Tournament database: Not connected")
-        if self.domjudge_db.is_connected():
-            if self.domjudge_db.test_connection():
-                print("  ✅ domjudge database: Connected and responsive")
-            else:
-                print("  ❌ domjudge database: Connection issues")
-        else:
-            print("  ❌ domjudge database: Not connected")
 
         # Check DOMjudge database
         print("\n🔍 Checking DOMjudge database...")
@@ -159,13 +150,11 @@ class SetupMenu:
         print("\n🔍 Checking contests...")
         print("  🚧 Contest verification coming in Step 3")
 
-        print(f"\n{'=' * 50}")
+        print(f"\n{'='*50}")
         overall_ready = (
-                self.db_manager.is_connected() and
-                self.db_manager.test_connection() and
-                self.db_manager.get_tournament_state() is not None and
-                self.domjudge_db.is_connected() and
-                self.domjudge_db.test_connection()
+            self.db_manager.is_connected() and
+            self.db_manager.test_connection() and
+            self.db_manager.get_tournament_state() is not None
         )
 
         if overall_ready:
@@ -181,11 +170,7 @@ class SetupMenu:
         print(f"Host: {self.db_manager.config['host']}")
         print(f"Database: {self.db_manager.config['database']}")
 
-        if self.db_manager.is_connected():
-            print("database already connected")
-
-
-        elif self.db_manager.connect():
+        if self.db_manager.connect():
             print(f"{MESSAGES['operation_success']}")
             if self.db_manager.test_connection():
                 print("✅ Connection test passed")

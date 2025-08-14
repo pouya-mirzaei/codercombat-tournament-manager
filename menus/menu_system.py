@@ -14,9 +14,6 @@ class MenuSystem:
 
     def __init__(self):
         self.db_manager = DatabaseManager(DB_CONFIG['tournament'])
-        self.domjudge_db = DatabaseManager(DB_CONFIG['domjudge'])
-        self.db_manager.connect()
-        self.domjudge_db.connect()
         self.tournament_started = False
 
     def display_header(self):
@@ -144,7 +141,7 @@ class MenuSystem:
         """Setup and configuration menu"""
         # Import here to avoid circular imports
         from .setup_menu import SetupMenu
-        setup_menu = SetupMenu(self.db_manager, self.domjudge_db)
+        setup_menu = SetupMenu(self.db_manager)
         setup_menu.show_menu()
 
     def _tournament_control_menu(self):
