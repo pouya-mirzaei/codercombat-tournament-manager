@@ -55,16 +55,18 @@ class DOMjudgeAPI:
             print(f"❌ API response parsing failed: {e}")
             return None
 
-    def test_connection(self) -> bool:
+    def test_connection(self, silent : bool = False) -> bool:
         """Test API connection by fetching basic info"""
         result = self._make_request('GET', '/info')
         if result:
-            print("✅ DOMjudge API connection successful")
-            if 'api_version' in result:
+            if not silent:
+                print("✅ DOMjudge API connection successful")
+            if 'api_version' in result and not silent:
                 print(f"📊 API Version: {result['api_version']}")
             return True
         else:
-            print("❌ DOMjudge API connection failed")
+            if not silent:
+                print("❌ DOMjudge API connection failed")
             return False
 
     def get_info(self) -> Optional[Dict]:
@@ -86,6 +88,23 @@ class DOMjudgeAPI:
         """
         return self._make_request('POST', '/contests', data=contest_data)
 
+    def create_team(self, team_data : Dict[str, Any]) -> Optional[Dict]:
+        """
+        Create a new team
+        team_data should include: id, icpc_id, label, name, display_name
+        """
+        if 'group_ids' not in team_data:
+            team_data['group_ids'] = ["3"]
+        return self._make_request("POST", '/teams', data=team_data)
+
+
+    def create_user(self, user_data : Dict[str, Any] ) -> Optional[Dict]:
+        """
+        Create a new team
+        user_data should include: id, icpc_id, label, name, display_name
+        """
+        return self._make_request("POST", '/users', data=user_data)
+
     def update_contest(self, contest_id: str, contest_data: Dict) -> Optional[Dict]:
         """Update an existing contest"""
         return self._make_request('PUT', f'/contests/{contest_id}', data=contest_data)
@@ -101,11 +120,16 @@ class DOMjudgeAPI:
         return self._make_request('GET', endpoint)
 
 
-    def get_team(self, team_id: str, contest_id: str = None) -> Optional[Dict]:
+    def get_team_by_contest(self, team_id: str, contest_id: str = None) -> Optional[Dict]:
         """Get specific team by ID"""
         endpoint = f'/teams/{team_id}'
         params = {'contest': contest_id} if contest_id else None
         return self._make_request('GET', endpoint, params=params)
+
+    def get_team(self, team_id: str) -> Optional[Dict]:
+        """Get specific team by ID"""
+        endpoint = f'/teams/{team_id}'
+        return self._make_request('GET', endpoint)
 
     def get_organizations(self) -> Optional[List[Dict]]:
         """Get all organizations"""

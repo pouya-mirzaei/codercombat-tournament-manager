@@ -33,9 +33,6 @@ class SetupMenu:
                 "✅ Verify Complete Setup"
             ]
 
-
-            print(self.domjudge_api.verify_api_access())
-
             self._display_menu_options("📋 Setup & Configuration", options)
             choice = self._get_user_choice("Select option", [1, 2, 3, 4, 5])
 
@@ -98,7 +95,7 @@ class SetupMenu:
             domjudge_accounts_query = "SELECT COUNT(*) AS count FROM teams WHERE domjudge_team_id IS NOT NULL"
             domjudge_accounts = self.db_manager.fetch_one(domjudge_accounts_query)
             domjudge_accounts_count = domjudge_accounts['count'] if domjudge_accounts else 0
-            
+
             print(f"Teams in DB: {teams_in_db}/{TOURNAMENT_CONFIG['total_teams']}")
             print(f"DOMjudge Accounts: {domjudge_accounts_count}/{teams_in_db}")
 
@@ -136,7 +133,7 @@ class SetupMenu:
             print(f"❌ Invalid file path: {path_error}")
             self._pause_for_user()
             return
-        
+
         # Validate CSV content
         is_valid, errors, valid_teams = CSVValidator.validate_teams_csv(file_path)
 
@@ -159,7 +156,6 @@ class SetupMenu:
             self._pause_for_user()
             return
 
-
         # Insert new teams
         insert_query = "INSERT INTO teams (name) VALUES (%s)"
         cnt = 0
@@ -168,7 +164,7 @@ class SetupMenu:
             params = (team['name'])
             self.db_manager.execute_query(insert_query, params)
             if cnt % 7 == 0 or cnt == len(valid_teams):
-                print(display_progress_bar(cnt,len(valid_teams), 100 , f"inserted {cnt}/{len(valid_teams)}"))
+                print(display_progress_bar(cnt, len(valid_teams), 100, f"inserted {cnt}/{len(valid_teams)}"))
 
         print(f"🎉 Successfully loaded {len(valid_teams)} teams from CSV.")
         self._pause_for_user()
@@ -183,10 +179,9 @@ class SetupMenu:
             print("❌ Tournament database not connected. Please connect first.")
             self._pause_for_user()
             return
-        
-        if not self.domjudge_db.connect():
-            print("❌ Could not connect to DOMjudge database. Please check configuration.")
-            self.domjudge_db.disconnect()
+
+        if not self.domjudge_api.test_connection(True):
+            print("❌ Could not connect to DOMjudge api. Please check configuration.")
             self._pause_for_user()
             return
 
@@ -194,33 +189,61 @@ class SetupMenu:
         teams_to_process = self.db_manager.fetch_query("SELECT * FROM teams WHERE domjudge_team_id IS NULL")
         if not teams_to_process:
             print("✅ All teams already have DOMjudge accounts.")
-            self.domjudge_db.disconnect()
+
             self._pause_for_user()
             return
 
         print(f"Processing {len(teams_to_process)} teams to create DOMjudge accounts...")
 
+        cnt = 0
+        error_teams = []
+
         for i, team in enumerate(teams_to_process):
             username = TeamValidator.generate_username(team['name'])
             password = TeamValidator.generate_password(team['name'])
-            
-            # Create user and team in DOMjudge
-            domjudge_data = self.domjudge_db.create_team_with_user(
-                team_name=team['name'],
-                username=username,
-                email=team['email'],
-                password=password
-            )
 
-            if domjudge_data:
-                # Update local tournament database with new IDs
-                update_query = "UPDATE teams SET domjudge_team_id = %s, domjudge_user_id = %s WHERE id = %s"
-                self.db_manager.execute_query(update_query, (domjudge_data['team_id'], domjudge_data['user_id'], team['id']))
+            print(f"creating user => {username} => {password}")
 
+            team = {
+                'id': team['id'],
+                'icpc_id': team['id'],
+                'name': team['name'],
+                'display_name': team['name'],
+                'label': username,
+            }
+
+            user = {
+                'username': username,
+                'name': team['name'],
+                'roles': ["team"],
+                'password': password,
+                'team_id': None,
+            }
+
+            team_rs = self.domjudge_api.create_team(team)
+            if team_rs is None:
+                error_teams.append(team_rs)
+                break
+            user['team_id'] = team_rs['id']
+
+            user_rs = self.domjudge_api.create_user(user)
+            if user_rs is None:
+                error_teams.append(team['name'])
+                break
+
+            query = "UPDATE teams SET domjudge_team_id = %s, domjudge_user_id = %s WHERE id = %s"
+            self.db_manager.execute_query(query, (team_rs['id'], user_rs['id'], team['id']))
+            cnt += 1
             print(display_progress_bar(i + 1, len(teams_to_process)))
 
-        self.domjudge_db.disconnect()
         print(f"\n🎉 Finished creating DOMjudge accounts.")
+        print(f"Created {cnt} teams out of {len(teams_to_process)} teams to process.")
+        if cnt == len(teams_to_process):
+            print("✅ All accounts created successfully.")
+        else:
+            print("❌Fail to create DOMjudge accounts.")
+            print("\t Failed teams: {}".format(error_teams))
+
         self._pause_for_user()
 
     def _view_all_teams(self):
@@ -250,7 +273,7 @@ class SetupMenu:
         table_lines = format_table_data(headers, rows)
         for line in table_lines:
             print(line)
-        
+
         self._pause_for_user()
 
     def _verify_team_setup(self):
@@ -260,7 +283,7 @@ class SetupMenu:
         print("═" * 25)
 
         is_ready = True
-        
+
         # Check team count
         teams_in_db = self.db_manager.get_teams_count()
         expected_teams = TOURNAMENT_CONFIG['total_teams']
@@ -274,11 +297,12 @@ class SetupMenu:
         domjudge_accounts_query = "SELECT COUNT(*) AS count FROM teams WHERE domjudge_team_id IS NOT NULL"
         domjudge_accounts = self.db_manager.fetch_one(domjudge_accounts_query)
         domjudge_accounts_count = domjudge_accounts['count'] if domjudge_accounts else 0
-        
+
         if domjudge_accounts_count == teams_in_db and teams_in_db > 0:
             print(f"✅ DOMjudge Accounts: {domjudge_accounts_count} accounts created for {teams_in_db} teams.")
         else:
-            print(f"❌ DOMjudge Accounts: {domjudge_accounts_count}/{teams_in_db} accounts created. Please run 'Create DOMjudge accounts'.")
+            print(
+                f"❌ DOMjudge Accounts: {domjudge_accounts_count}/{teams_in_db} accounts created. Please run 'Create DOMjudge accounts'.")
             is_ready = False
 
         print("\n" + "=" * 50)
@@ -350,11 +374,11 @@ class SetupMenu:
         print("\n🔍 Checking contests...")
         print("  🚧 Contest verification coming in Step 3")
 
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         overall_ready = (
-            self.db_manager.is_connected() and
-            self.db_manager.test_connection() and
-            self.db_manager.get_tournament_state() is not None
+                self.db_manager.is_connected() and
+                self.db_manager.test_connection() and
+                self.db_manager.get_tournament_state() is not None
         )
 
         if overall_ready:
@@ -367,7 +391,6 @@ class SetupMenu:
     def _connect_tournament_database(self):
         """Connect to tournament database"""
         print("\n🔌 Connecting to tournament database...")
-
 
         # Use helper to validate connection parameters before attempting
         is_valid, errors = validate_database_connection_params(self.db_manager.config)
@@ -532,16 +555,17 @@ class SetupMenu:
             is_valid, is_yes, error_msg = InputValidator.validate_yes_no(response)
             if is_valid:
                 return is_yes
-            
+
             # Handle empty response with default value
             if not response:
                 return False
 
             print(error_msg)
 
+
 # File: main.py
 
-#!/usr/bin/env python3
+# !/usr/bin/env python3
 """
 CoderCombat Tournament Management System
 Main entry point for the tournament management application
