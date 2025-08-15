@@ -55,7 +55,7 @@ class DOMjudgeAPI:
             print(f"❌ API response parsing failed: {e}")
             return None
 
-    def test_connection(self, silent : bool = False) -> bool:
+    def test_connection(self, silent: bool = False) -> bool:
         """Test API connection by fetching basic info"""
         result = self._make_request('GET', '/info')
         if result:
@@ -88,7 +88,7 @@ class DOMjudgeAPI:
         """
         return self._make_request('POST', '/contests', data=contest_data)
 
-    def create_team(self, team_data : Dict[str, Any]) -> Optional[Dict]:
+    def create_team(self, team_data: Dict[str, Any]) -> Optional[Dict]:
         """
         Create a new team
         team_data should include: id, icpc_id, label, name, display_name
@@ -97,8 +97,7 @@ class DOMjudgeAPI:
             team_data['group_ids'] = ["3"]
         return self._make_request("POST", '/teams', data=team_data)
 
-
-    def create_user(self, user_data : Dict[str, Any] ) -> Optional[Dict]:
+    def create_user(self, user_data: Dict[str, Any]) -> Optional[Dict]:
         """
         Create a new team
         user_data should include: id, icpc_id, label, name, display_name
@@ -118,7 +117,6 @@ class DOMjudgeAPI:
         """Get teams, optionally filtered by contest"""
         endpoint = f'/contests/{contest_id}/teams'
         return self._make_request('GET', endpoint)
-
 
     def get_team_by_contest(self, team_id: str, contest_id: str = None) -> Optional[Dict]:
         """Get specific team by ID"""
@@ -159,7 +157,7 @@ class DOMjudgeAPI:
         """Get all programming languages"""
         return self._make_request('GET', '/languages')
 
-# Contest Management Helpers
+    # Contest Management Helpers
     def get_contest_by_name(self, contest_name: str) -> Optional[Dict]:
         """Find a contest by its name"""
         contests = self.get_contests()
@@ -232,6 +230,48 @@ class DOMjudgeAPI:
                 print("✅ Info endpoint accessible")
 
         return checks
+
+    # ADD THIS METHOD to the DOMjudgeAPI class in core/domjudge_api.py
+
+    def create_contest_with_json(self, contest_data: Dict[str, Any]) -> Optional[List]:
+        """
+        Create a contest using form-data with contest.json file
+        contest_data: Dictionary containing contest information
+        Returns: List with contest ID (e.g., ["2"]) or None on failure
+        """
+        import json
+
+        try:
+            # Prepare multipart form data - key should be 'json', filename should be 'contest.json'
+            files = {
+                'json': ('contest.json', json.dumps(contest_data), 'application/json')
+            }
+
+            # Make request using the session
+            response = self.session.post(
+                f"{self.base_url}/contests",
+                files=files,
+                timeout=self.timeout
+            )
+
+            response.raise_for_status()
+
+            # Parse response - should be ["2"] format
+            result = response.json()
+            return result if isinstance(result, str) else None
+
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Contest creation API request failed: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                print(f"❌ Response status: {e.response.status_code}")
+                print(f"❌ Response body: {e.response.text}")
+            return None
+        except json.JSONDecodeError as e:
+            print(f"❌ Failed to parse contest creation response: {e}")
+            return None
+        except Exception as e:
+            print(f"❌ Unexpected error in contest creation: {e}")
+            return None
 
     def close(self):
         """Close the API session"""

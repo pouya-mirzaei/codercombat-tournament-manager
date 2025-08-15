@@ -5,9 +5,12 @@ Handles database setup, team management, and contest configuration
 
 import pymysql
 from typing import List, Dict, Any
+
+from core import ContestManager
 from core.database import DatabaseManager
 from core.domjudge_api import DOMjudgeAPI
 from core.domjudge_db import DOMjudgeDBManager
+from core.contest_engine import ContestEngine
 from config import DB_CONFIG, MESSAGES, TOURNAMENT_CONFIG, DOMJUDGE_API_CONFIG
 from utils.validators import InputValidator, CSVValidator, TeamValidator
 from utils.helpers import validate_database_connection_params, read_csv_file, format_table_data, display_progress_bar
@@ -181,7 +184,7 @@ class SetupMenu:
             return
 
         if not self.domjudge_api.test_connection(True):
-            print("❌ Could not connect to DOMjudge api. Please check configuration.")
+            print("❌ Could not connect to DOMjudge API. Please check configuration.")
             self._pause_for_user()
             return
 
@@ -189,30 +192,35 @@ class SetupMenu:
         teams_to_process = self.db_manager.fetch_query("SELECT * FROM teams WHERE domjudge_team_id IS NULL")
         if not teams_to_process:
             print("✅ All teams already have DOMjudge accounts.")
-
             self._pause_for_user()
             return
 
         print(f"Processing {len(teams_to_process)} teams to create DOMjudge accounts...")
 
-        cnt = 0
-        error_teams = []
+        # Participant category group ID (3 = participants in standard DOMjudge setup)
+        PARTICIPANT_GROUP_ID = "3"
+
+        successful_count = 0
+        failed_teams = []
 
         for i, team in enumerate(teams_to_process):
             username = TeamValidator.generate_username(team['name'])
             password = TeamValidator.generate_password(team['name'])
 
-            print(f"creating user => {username} => {password}")
+            print(f"Creating accounts for: {team['name']} (username: {username})")
 
-            team = {
+            # Prepare team data
+            team_data = {
                 'id': team['id'],
                 'icpc_id': team['id'],
                 'name': team['name'],
                 'display_name': team['name'],
                 'label': username,
+                'group_ids': [PARTICIPANT_GROUP_ID]
             }
 
-            user = {
+            # Prepare user data
+            user_data = {
                 'username': username,
                 'name': team['name'],
                 'roles': ["team"],
@@ -220,30 +228,68 @@ class SetupMenu:
                 'team_id': None,
             }
 
-            team_rs = self.domjudge_api.create_team(team)
-            if team_rs is None:
-                error_teams.append(team_rs)
-                break
-            user['team_id'] = team_rs['id']
+            # Create team in DOMjudge
+            team_result = self.domjudge_api.create_team(team_data)
+            if team_result is None:
+                failed_teams.append({
+                    'name': team['name'],
+                    'error': 'Failed to create team in DOMjudge',
+                    'step': 'team_creation'
+                })
+                print(f"  ❌ Failed to create team for {team['name']}")
+                continue
 
-            user_rs = self.domjudge_api.create_user(user)
-            if user_rs is None:
-                error_teams.append(team['name'])
-                break
+            # Update user data with team ID
+            user_data['team_id'] = team_result['id']
 
-            query = "UPDATE teams SET domjudge_team_id = %s, domjudge_user_id = %s WHERE id = %s"
-            self.db_manager.execute_query(query, (team_rs['id'], user_rs['id'], team['id']))
-            cnt += 1
-            print(display_progress_bar(i + 1, len(teams_to_process)))
+            # Create user in DOMjudge
+            user_result = self.domjudge_api.create_user(user_data)
+            if user_result is None:
+                failed_teams.append({
+                    'name': team['name'],
+                    'error': 'Failed to create user in DOMjudge (team was created)',
+                    'step': 'user_creation',
+                    'domjudge_team_id': team_result['id']
+                })
+                print(f"  ❌ Failed to create user for {team['name']} (team created successfully)")
+                continue
 
-        print(f"\n🎉 Finished creating DOMjudge accounts.")
-        print(f"Created {cnt} teams out of {len(teams_to_process)} teams to process.")
-        if cnt == len(teams_to_process):
-            print("✅ All accounts created successfully.")
+            # Update local database with DOMjudge IDs
+            update_query = "UPDATE teams SET domjudge_team_id = %s, domjudge_user_id = %s WHERE id = %s"
+            if not self.db_manager.execute_query(update_query, (team_result['id'], user_result['id'], team['id'])):
+                failed_teams.append({
+                    'name': team['name'],
+                    'error': 'Failed to update local database (DOMjudge accounts created)',
+                    'step': 'database_update',
+                    'domjudge_team_id': team_result['id'],
+                    'domjudge_user_id': user_result['id']
+                })
+                print(f"  ❌ Failed to update database for {team['name']} (DOMjudge accounts created)")
+                continue
+
+            successful_count += 1
+            print(f"  ✅ Successfully created accounts for {team['name']}")
+
+            # Show progress
+            progress_msg = f"Progress: {i + 1}/{len(teams_to_process)} teams processed"
+            print(display_progress_bar(i + 1, len(teams_to_process), 50, progress_msg))
+
+        # Final results summary
+        print(f"\n{'=' * 50}")
+        print(f"🎉 Account Creation Complete")
+        print(f"✅ Successfully created: {successful_count}/{len(teams_to_process)} accounts")
+
+        if failed_teams:
+            print(f"❌ Failed: {len(failed_teams)} accounts")
+            print("\nFailed Teams Details:")
+            for failure in failed_teams:
+                print(f"  • {failure['name']}: {failure['error']}")
+                if failure['step'] in ['user_creation', 'database_update']:
+                    print(f"    Note: DOMjudge team ID {failure.get('domjudge_team_id')} was created")
         else:
-            print("❌Fail to create DOMjudge accounts.")
-            print("\t Failed teams: {}".format(error_teams))
+            print("🎉 All accounts created successfully!")
 
+        print(f"{'=' * 50}")
         self._pause_for_user()
 
     def _view_all_teams(self):
@@ -315,16 +361,464 @@ class SetupMenu:
         self._pause_for_user()
 
     def _contest_setup_menu(self):
-        """Contest setup submenu - placeholder for Step 3"""
+        """Contest setup submenu - Main functionality + Testing"""
+        while True:
+            self._display_header()
+            print("\n🏆 Contest Setup")
+            print("═" * 20)
+
+            # Show contest status
+            try:
+                contest_manager = ContestManager(self.db_manager)
+                status = contest_manager.get_contest_creation_status()
+                contest_engine = ContestEngine()
+                summary = contest_engine.get_contest_summary()
+
+                print(f"📊 Total contests planned: {summary['total_contests']}")
+                print(
+                    f"🏆 By type: Duels: {summary['by_type']['duel']}, Groups: {summary['by_type']['group']}, Speed: {summary['by_type']['speed']}")
+                print(f"Status: {status['total_created']}/{status['total_planned']} contests created in DOMjudge")
+                print()
+            except Exception as e:
+                print(f"❌ Status error: {e}")
+                print()
+
+            print("=" * 60)
+            print("📋 MAIN FUNCTIONALITY")
+            print("=" * 60)
+
+            options = [
+                "🏗️ Create All Contests in DOMjudge",
+                "📊 View Contest Creation Status",
+                "⚙️ Manage Contest Settings",
+                "✅ Verify Contest Setup"
+            ]
+
+            for i, option in enumerate(options, 1):
+                print(f"{i}. {option}")
+
+            print("\n" + "=" * 60)
+            print("🧪 TESTING & VALIDATION")
+            print("=" * 60)
+
+            testing_options = [
+                "🧪 Test Contest Structure Generation",
+                "📋 View All Planned Contests",
+                "🔍 Test Contest Flow Mapping",
+                "✅ Validate Contest Structure",
+                "🎯 Test Initial Team Placement"
+            ]
+
+            for i, option in enumerate(testing_options, 5):
+                print(f"{i}. {option}")
+
+            print(f"\n{len(options) + len(testing_options) + 1}. 🔙 Back to Setup Menu")
+
+            choice = self._get_user_choice("Select option", list(range(1, len(options) + len(testing_options) + 2)))
+
+            if choice == "1":
+                self._create_all_contests()
+            elif choice == "2":
+                self._view_contest_creation_status()
+            elif choice == "3":
+                self._manage_contest_settings()
+            elif choice == "4":
+                self._verify_contest_setup()
+            elif choice == "5":
+                self._test_contest_generation()
+            elif choice == "6":
+                self._view_all_planned_contests()
+            elif choice == "7":
+                self._test_contest_flow_mapping()
+            elif choice == "8":
+                self._validate_contest_structure()
+            elif choice == "9":
+                self._test_initial_team_placement()
+            elif choice == "10":
+                break
+
+    def _test_contest_generation(self):
+        """Test contest generation for specific rounds"""
         self._display_header()
-        print("\n🏆 Contest Setup")
-        print("═" * 20)
+        print("\n🧪 Test Contest Generation")
+        print("═" * 30)
+
+        try:
+            contest_engine = ContestEngine()
+
+            # Test each round
+            for round_num in range(1, 9):
+                print(f"\n🏆 Round {round_num}:")
+                contests = contest_engine.generate_round_contests(round_num)
+
+                for contest in contests:
+                    print(f"  • {contest['contest_name']}: {contest['contest_type']} "
+                          f"({contest['max_teams']} teams, {contest['problems_count']} problems)")
+
+                print(f"  Total: {len(contests)} contests")
+
+            print(f"\n{'=' * 50}")
+            print("✅ Contest generation test completed successfully!")
+
+        except Exception as e:
+            print(f"❌ Contest generation failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+        self._pause_for_user()
+
+    def _view_all_planned_contests(self):
+        """View all planned contests in a formatted table"""
+        self._display_header()
+        print("\n📋 All Planned Contests")
+        print("═" * 25)
+
+        try:
+            contest_engine = ContestEngine()
+            all_contests = contest_engine.generate_all_contests()
+
+            print(f"{'Round':<6} {'Contest Name':<20} {'Type':<6} {'Teams':<6} {'Problems':<9} {'Duration'}")
+            print("-" * 70)
+
+            for contest in all_contests:
+                print(f"{contest['round_number']:<6} "
+                      f"{contest['contest_name']:<20} "
+                      f"{contest['contest_type']:<6} "
+                      f"{contest['max_teams']:<6} "
+                      f"{contest['problems_count']:<9} "
+                      f"{contest['duration_minutes']} min")
+
+            print("-" * 70)
+            print(f"Total contests: {len(all_contests)}")
+
+            # Show summary by round
+            summary = contest_engine.get_contest_summary()
+            print(f"\n📊 Summary by round:")
+            for round_num, count in summary['by_round'].items():
+                print(f"  Round {round_num}: {count} contests")
+
+        except Exception as e:
+            print(f"❌ Failed to generate contest list: {e}")
+            import traceback
+            traceback.print_exc()
+
+        self._pause_for_user()
+
+    def _test_contest_flow_mapping(self):
+        """Test contest flow mapping"""
+        self._display_header()
+        print("\n🔍 Test Contest Flow Mapping")
+        print("═" * 30)
+
+        try:
+            contest_engine = ContestEngine()
+
+            # Test specific contests flow
+            test_contests = [
+                "R1_Duel_01", "R1_Duel_12", "R1_Duel_24",
+                "R2_Group_Losers", "R2_Duel_06",
+                "R3_Duel_01", "R7_Duel_01", "R8_Final", "R1_Duel_23"
+            ]
+
+            for contest_name in test_contests:
+                flow = contest_engine.get_contest_flow(contest_name)
+                print(f"\n🏆 {contest_name}:")
+                if flow:
+                    for key, value in flow.items():
+                        print(f"  • {key}: {value}")
+                else:
+                    print(f"  ❌ No flow mapping found!")
+
+            print(f"\n{'=' * 50}")
+            print("✅ Contest flow mapping test completed!")
+
+        except Exception as e:
+            print(f"❌ Contest flow mapping test failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+        self._pause_for_user()
+
+    def _validate_contest_structure(self):
+        """Validate the complete contest structure"""
+        self._display_header()
+        print("\n✅ Validate Contest Structure")
+        print("═" * 30)
+
+        try:
+            contest_engine = ContestEngine()
+            is_valid, errors = contest_engine.validate_contest_structure()
+
+            if is_valid:
+                print("🎉 Contest structure validation PASSED!")
+                print("✅ All contests have proper flow mappings")
+                print("✅ Team counts are consistent")
+                print("✅ Contest structure is valid")
+            else:
+                print("❌ Contest structure validation FAILED!")
+                print("\nErrors found:")
+                for error in errors:
+                    print(f"  • {error}")
+
+            # Show summary
+            summary = contest_engine.get_contest_summary()
+            print(f"\n📊 Structure Summary:")
+            print(f"  Total contests: {summary['total_contests']}")
+            print(f"  Duels: {summary['by_type']['duel']}")
+            print(f"  Groups: {summary['by_type']['group']}")
+            print(f"  Speed: {summary['by_type']['speed']}")
+
+        except Exception as e:
+            print(f"❌ Validation failed with error: {e}")
+            import traceback
+            traceback.print_exc()
+
+        self._pause_for_user()
+
+    def _test_initial_team_placement(self):
+        """Test initial team placement for Round 1"""
+        self._display_header()
+        print("\n🎯 Test Initial Team Placement")
+        print("═" * 35)
+
+        try:
+            contest_engine = ContestEngine()
+            placement = contest_engine.get_initial_team_placement()
+
+            print("Initial team placement for Round 1:")
+            print("-" * 40)
+
+            for contest_name, teams in placement.items():
+                print(f"{contest_name}: Team {teams[0]} vs Team {teams[1]}")
+
+            print("-" * 40)
+            print(f"Total teams placed: {sum(len(teams) for teams in placement.values())}")
+            print(f"Expected: 48 teams")
+
+            # Verify all teams 1-48 are placed exactly once
+            all_placed_teams = []
+            for teams in placement.values():
+                all_placed_teams.extend(teams)
+
+            all_placed_teams.sort()
+            expected_teams = list(range(1, 49))
+
+            if all_placed_teams == expected_teams:
+                print("✅ All 48 teams placed correctly, no duplicates!")
+            else:
+                print("❌ Team placement error!")
+                missing = set(expected_teams) - set(all_placed_teams)
+                duplicates = [x for x in all_placed_teams if all_placed_teams.count(x) > 1]
+                if missing:
+                    print(f"  Missing teams: {missing}")
+                if duplicates:
+                    print(f"  Duplicate teams: {set(duplicates)}")
+
+        except Exception as e:
+            print(f"❌ Team placement test failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+        self._pause_for_user()
+
+    def _create_all_contests(self):
+        """Create all contests in DOMjudge - Main functionality"""
+        self._display_header()
+        print("\n🏗️ Create All Contests in DOMjudge")
+        print("═" * 35)
+
+        if not self.db_manager.is_connected():
+            print("❌ Tournament database not connected. Please connect first.")
+            self._pause_for_user()
+            return
+
+        try:
+            contest_manager = ContestManager(self.db_manager)
+
+            # Check current status
+            status = contest_manager.get_contest_creation_status()
+            if status['total_created'] > 0:
+                print(f"⚠️ {status['total_created']} contests already exist in DOMjudge.")
+                if not self._confirm_action("Continue and create remaining contests?"):
+                    return
+
+            # Get activation delay from user
+            print(f"\nContest activation settings:")
+            print(f"Activation delay determines when contests become visible to teams.")
+            print(f"Default: 48 hours from now")
+
+            delay_input = input("Enter activation delay in hours [48]: ").strip()
+            try:
+                activation_delay = int(delay_input) if delay_input else 48
+            except ValueError:
+                print("Invalid input, using default 48 hours")
+                activation_delay = 48
+
+            print(f"\n🚀 Creating contests with {activation_delay}h activation delay...")
+            if not self._confirm_action("This will create all planned contests in DOMjudge. Continue?"):
+                return
+
+            # Create contests
+            results = contest_manager.create_all_contests(activation_delay)
+
+            # Display results
+            print(f"\n{'=' * 60}")
+            print(f"🎉 Contest Creation Results")
+            print(f"{'=' * 60}")
+            print(f"✅ Successfully created: {results['success_count']}/{results['total_contests']}")
+
+            if results['failed_contests']:
+                print(f"❌ Failed: {len(results['failed_contests'])}")
+                print("\nFailed contests:")
+                for failure in results['failed_contests']:
+                    print(f"  • {failure['name']}: {failure['error']}")
+                    if failure.get('domjudge_id'):
+                        print(f"    (DOMjudge ID: {failure['domjudge_id']})")
+            else:
+                print("🎉 All contests created successfully!")
+
+            if results['success_count'] > 0:
+                print(f"\n💡 Next steps:")
+                print(f"• Contests are created but not visible to teams yet")
+                print(f"• Use 'Manage Contest Settings' to activate when ready")
+                print(f"• Use 'Verify Contest Setup' to check everything")
+
+        except Exception as e:
+            print(f"❌ Contest creation failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+        self._pause_for_user()
+
+    def _view_contest_creation_status(self):
+        """View detailed contest creation status"""
+        self._display_header()
+        print("\n📊 Contest Creation Status")
+        print("═" * 30)
+
+        try:
+            contest_manager = ContestManager(self.db_manager)
+            status = contest_manager.get_contest_creation_status()
+
+            # Summary
+            print(f"📋 Summary:")
+            print(f"  Total planned: {status['total_planned']}")
+            print(f"  Total created: {status['total_created']}")
+            print(f"  Missing: {len(status['missing_contests'])}")
+
+            # By round breakdown
+            print(f"\n📊 By Round:")
+            print(f"{'Round':<8} {'Planned':<8} {'Created':<8} {'Missing':<8}")
+            print("-" * 40)
+
+            for round_num, data in status['by_round'].items():
+                missing_count = len(data.get('missing', []))
+                print(f"R{round_num:<7} {data['planned']:<8} {data['created']:<8} {missing_count:<8}")
+
+            # Created contests details
+            if status['created_contests']:
+                print(f"\n✅ Created Contests:")
+                print(f"{'Contest Name':<25} {'Round':<6} {'Type':<6} {'DOMjudge ID'}")
+                print("-" * 60)
+                for contest in status['created_contests'][:10]:  # Show first 10
+                    print(f"{contest['name']:<25} R{contest['round']:<5} {contest['type']:<6} {contest['domjudge_id']}")
+
+                if len(status['created_contests']) > 10:
+                    print(f"... and {len(status['created_contests']) - 10} more")
+
+            # Missing contests
+            if status['missing_contests']:
+                print(f"\n❌ Missing Contests:")
+                for contest in status['missing_contests'][:5]:  # Show first 5
+                    print(f"  • R{contest['round']}: {contest['name']} ({contest['type']})")
+
+                if len(status['missing_contests']) > 5:
+                    print(f"  ... and {len(status['missing_contests']) - 5} more")
+
+        except Exception as e:
+            print(f"❌ Failed to get status: {e}")
+            import traceback
+            traceback.print_exc()
+
+        self._pause_for_user()
+
+    def _manage_contest_settings(self):
+        """Manage contest timing and activation settings"""
+        self._display_header()
+        print("\n⚙️ Manage Contest Settings")
+        print("═" * 30)
+
         print(f"{MESSAGES['not_implemented']}")
-        print("\nComing in Step 3:")
-        print("• 🏗️ Create all contests in DOMjudge")
-        print("• ⏰ Configure contest timing")
-        print("• 📋 View contest structure")
-        print("• ✅ Verify contest setup")
+        print("\nComing in Step 4:")
+        print("• ⚡ Activate contests for team visibility")
+        print("• 📅 Set contest start times")
+        print("• ⏰ Bulk timing management")
+        print("• 🔄 Update contest schedules")
+
+        self._pause_for_user()
+
+    def _verify_contest_setup(self):
+        """Comprehensive contest setup verification"""
+        self._display_header()
+        print("\n✅ Verify Contest Setup")
+        print("═" * 25)
+
+        try:
+            contest_manager = ContestManager(self.db_manager)
+            is_complete, errors, status_info = contest_manager.verify_contest_setup()
+
+            print("🔍 Checking contest setup...")
+            print("-" * 40)
+
+            # Contest creation check
+            contests_status = status_info['contests_status']
+            if contests_status['total_created'] == contests_status['total_planned']:
+                print("✅ Contest Creation: All contests created")
+            elif contests_status['total_created'] > 0:
+                print(
+                    f"⚠️ Contest Creation: {contests_status['total_created']}/{contests_status['total_planned']} created")
+            else:
+                print("❌ Contest Creation: No contests created")
+
+            # Contest structure check
+            if status_info['structure_valid']:
+                print("✅ Contest Structure: Valid")
+            else:
+                print("❌ Contest Structure: Invalid")
+
+            # DOMjudge database check
+            try:
+                test_manager = ContestManager(self.db_manager)
+                if test_manager.domjudge_db.connect():
+                    print("✅ DOMjudge Database: Connected")
+                    test_manager.domjudge_db.disconnect()
+                else:
+                    print("❌ DOMjudge Database: Connection failed")
+            except:
+                print("❌ DOMjudge Database: Error")
+
+            print("-" * 40)
+
+            # Overall status
+            if is_complete:
+                print("🎉 Contest setup is COMPLETE!")
+                print("✅ Ready for tournament operations")
+            else:
+                print("⚠️ Contest setup is INCOMPLETE")
+                print("\nIssues found:")
+                for error in errors:
+                    print(f"  • {error}")
+
+            # Show summary
+            print(f"\n📊 Summary:")
+            print(f"  Contests: {contests_status['total_created']}/{contests_status['total_planned']} created")
+            if contests_status['missing_contests']:
+                print(f"  Missing: {len(contests_status['missing_contests'])} contests")
+
+        except Exception as e:
+            print(f"❌ Verification failed: {e}")
+            import traceback
+            traceback.print_exc()
 
         self._pause_for_user()
 
