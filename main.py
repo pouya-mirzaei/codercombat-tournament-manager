@@ -14,14 +14,8 @@ import sys
 import os
 
 
-from tests.validators import TestCSVValidator
 
-test = TestCSVValidator()
-# print(test.validate("data/teams.csv"))
-# print(test.headersMatch("data/teams.csv" , ["name","email" , "institution"]))
-print(TestCSVValidator.validate_teams_csv("data/teams.csv"))
 
-exit(0)
 
 # Add project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

@@ -90,11 +90,16 @@ class DOMjudgeAPI:
         """Update an existing contest"""
         return self._make_request('PUT', f'/contests/{contest_id}', data=contest_data)
 
-    def get_teams(self, contest_id: str = None) -> Optional[List[Dict]]:
+    def get_teams(self) -> Optional[List[Dict]]:
         """Get teams, optionally filtered by contest"""
-        endpoint = '/teams'
-        params = {'contest': contest_id} if contest_id else None
-        return self._make_request('GET', endpoint, params=params)
+        endpoint = 'teams'
+        return self._make_request('GET', endpoint)
+
+    def get_teams_by_contest(self, contest_id: str = None) -> Optional[List[Dict]]:
+        """Get teams, optionally filtered by contest"""
+        endpoint = f'/contests/{contest_id}/teams'
+        return self._make_request('GET', endpoint)
+
 
     def get_team(self, team_id: str, contest_id: str = None) -> Optional[Dict]:
         """Get specific team by ID"""
@@ -130,17 +135,7 @@ class DOMjudgeAPI:
         """Get all programming languages"""
         return self._make_request('GET', '/languages')
 
-    def finalize_contest(self, contest_id: str) -> bool:
-        """Finalize a contest (make results official)"""
-        result = self._make_request('POST', f'/contests/{contest_id}/finalize')
-        return result is not None and result.get('success', False)
-
-    def unfinalize_contest(self, contest_id: str) -> bool:
-        """Unfinalize a contest (make results provisional again)"""
-        result = self._make_request('DELETE', f'/contests/{contest_id}/finalize')
-        return result is not None and result.get('success', False)
-
-    # Contest Management Helpers
+# Contest Management Helpers
     def get_contest_by_name(self, contest_name: str) -> Optional[Dict]:
         """Find a contest by its name"""
         contests = self.get_contests()

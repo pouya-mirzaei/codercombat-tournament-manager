@@ -7,6 +7,7 @@ import sys
 from typing import List, Optional
 from core import DatabaseManager
 from config import DB_CONFIG, MENU_CONFIG, MESSAGES, TOURNAMENT_CONFIG
+from utils.validators import InputValidator
 
 
 class MenuSystem:
@@ -64,7 +65,9 @@ class MenuSystem:
 
     def get_user_choice(self, prompt: str, valid_choices: List[int], allow_back: bool = False) -> str:
         """Get and validate user input"""
+        all_valid_choices = valid_choices[:]
         valid_str_choices = [str(c) for c in valid_choices]
+
         if allow_back:
             valid_str_choices.append('b')
             prompt += " (b for back)"
@@ -72,12 +75,18 @@ class MenuSystem:
         while True:
             try:
                 choice = input(f"\n{prompt}: ").strip().lower()
-                if choice in valid_str_choices:
+
+                if choice == 'b' and allow_back:
                     return choice
-                elif choice in ['q', 'quit', 'exit']:
+                if choice in ['q', 'quit', 'exit']:
                     self.cleanup_and_exit()
+
+                # Validate numerical choice
+                is_valid, error_msg = InputValidator.validate_choice(choice, all_valid_choices)
+                if is_valid:
+                    return choice
                 else:
-                    print(f"{MESSAGES['invalid_choice']} Valid options: {valid_choices}")
+                    print(f"❌ {error_msg}")
                     if allow_back:
                         print("Enter 'b' to go back, 'q' to quit")
             except KeyboardInterrupt:
@@ -108,14 +117,17 @@ class MenuSystem:
         suffix = " [Y/n]" if default_yes else " [y/N]"
         prompt = f"{message}{suffix}"
 
-        try:
-            response = input(f"\n{prompt}: ").strip().lower()
+        while True:
+            response = input(f"\n{prompt}: ").strip()
+            is_valid, is_yes, error_msg = InputValidator.validate_yes_no(response)
+            if is_valid:
+                return is_yes
+
+            # Handle empty response with default value
             if not response:
                 return default_yes
-            return response in ['y', 'yes', 'true', '1']
-        except KeyboardInterrupt:
-            print(f"\n{MESSAGES['goodbye']}")
-            self.cleanup_and_exit()
+
+            print(error_msg)
 
     def main_menu(self):
         """Display and handle main menu navigation"""
@@ -280,7 +292,7 @@ class MenuSystem:
 
         # DOMjudge API status
         try:
-            from core import DOMjudgeAPI
+            from core.domjudge_api import DOMjudgeAPI
             api = DOMjudgeAPI()
             if api.test_connection():
                 print("✅ DOMjudge API: Accessible")
@@ -312,6 +324,8 @@ class MenuSystem:
     def run(self):
         """Main entry point for the menu system"""
         try:
+            # Attempt to connect to the tournament database at startup
+            self.db_manager.connect()
             self.main_menu()
         except KeyboardInterrupt:
             print(f"\n{MESSAGES['goodbye']}")
